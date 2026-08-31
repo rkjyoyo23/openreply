@@ -1,0 +1,65 @@
+import { NextRequest, NextResponse } from "next/server";
+import os from "node:os";
+import { createDMWorker } from "@/lib/queue/dm-worker";
+import { recordWorkerHeartbeat } from "@/lib/ops/worker-health";
+
+/**
+ * Serverless stand-in for the always-on DM worker.
+ *
+ * OpenReply's worker (worker/dm-worker.ts) is designed to run forever on a
+ * dedicated host. This project has no such host - instead, an external
+ * scheduler (e.g. cron-job.org) hits this endpoint roughly once a minute.
+ * Each hit spins up a real BullMQ Worker, lets it drain whatever jobs are
+ * ready during a bounded window, then shuts it down before the serverless
+ * function's time limit. Comments arrive via the webhook as usual; this
+ * endpoint only stands in for the process that would otherwise send the
+ * DMs 24/7.
+ *
+ * Trade-off vs. a real always-on worker: a DM can wait up to one scheduler
+ * interval (~1 minute) before it goes out, instead of being sent within
+ * seconds. Delayed jobs (rate-limit retries, follow-up messages) that
+ * become due between hits also wait for the next hit.
+ */
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+// Vercel Hobby allows up to 60s; stay under that with room for the
+// function's own cold-start and shutdown overhead.
+export const maxDuration = 55;
+
+const RUN_WINDOW_MS = 45_000;
+
+export async function GET(request: NextRequest) {
+    const authHeader = request.headers.get("authorization");
+    const cronSecret = process.env.CRON_SECRET;
+
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
+        return NextResponse.json(
+          { success: false, error: "Unauthorized" },
+          { status: 401 }
+              );
+  }
+
+  const startedAt = new Date().toISOString();
+
+  await recordWorkerHeartbeat({
+        pid: process.pid,
+        hostname: os.hostname(),
+        startedAt,
+  }).catch(() => {});
+
+  const worker = createDMWorker();
+
+  try {
+        await new Promise((resolve) => setTimeout(resolve, RUN_WINDOW_MS));
+  } finally {
+        await worker.close().catch(() => {});
+  }
+
+  return NextResponse.json({
+        success: true,
+        startedAt,
+        ranMs: RUN_WINDOW_MS,
+        finishedAt: new Date().toISOString(),
+  });
+}
