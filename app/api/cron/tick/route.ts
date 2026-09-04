@@ -25,9 +25,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 // Hobby plan (with Fluid Compute) allows up to 300s; stay comfortably
   // under that, with buffer for cold-start and shutdown overhead.
-export const maxDuration = 280;
+export const maxDuration = 55;
 
-const RUN_WINDOW_MS = 240_000;
+const RUN_WINDOW_MS = 20_000;
 
 // Most schedulers can send a custom Authorization header, but some simple
 // free "visit this URL periodically" pingers can't. Accept the secret as a
